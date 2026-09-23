@@ -1,159 +1,111 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { PEOPLE } from "./data/reference";
+import { dashboardMetrics, siteStatuses } from "./rules/selectors";
+import { useLedger } from "./ui/useLedger";
+import { ROLE_LABEL } from "./ui/format";
+import { RegistryTab } from "./ui/RegistryTab";
+import { HandoverTab } from "./ui/HandoverTab";
+import { ClosureTab } from "./ui/ClosureTab";
+import { TraceTab } from "./ui/TraceTab";
+import type { LedgerEvent } from "./data/events";
+import type { CommitResult } from "./ui/useLedger";
 
-const project = {
-  "id": "hxwl-10",
-  "port": 5110,
-  "title": "考古探方记录",
-  "subtitle": "遗址探方、地层关系与出土物坐标档案",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#854d0e",
-    "#047857",
-    "#475569"
-  ],
-  "domain": "考古发掘",
-  "users": [
-    "发掘队员",
-    "领队",
-    "资料整理员"
-  ],
-  "metrics": [
-    "探方数",
-    "地层数",
-    "出土物",
-    "未整理记录"
-  ],
-  "filters": [
-    "灰坑",
-    "墓葬",
-    "房址",
-    "沟状遗迹"
-  ],
-  "fields": [
-    "遗址",
-    "探方",
-    "地层",
-    "遗迹单位",
-    "深度",
-    "土色",
-    "坐标点",
-    "出土物"
-  ],
-  "records": [
-    [
-      "T0203",
-      "第3层",
-      "灰褐土",
-      "陶片12件，坐标E3N4"
-    ],
-    [
-      "T0204",
-      "H12灰坑",
-      "黑褐土",
-      "夹炭屑，见动物骨"
-    ],
-    [
-      "T0301",
-      "F2房址",
-      "夯土面",
-      "柱洞关系需复核"
-    ]
-  ]
-};
+type TabKey = "registry" | "handover" | "closure" | "trace";
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "registry", label: "探方登记" },
+  { key: "handover", label: "标本交接台" },
+  { key: "closure", label: "收官闸口" },
+  { key: "trace", label: "追溯台账" },
+];
 
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
+function MetricCard({ label, value, hint, tone }: { label: string; value: string | number; hint?: string; tone?: string }) {
   return (
-    <article className="metric-card">
+    <article className={`metric-card ${tone ?? ""}`}>
       <span>{label}</span>
       <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
+      {hint && <small>{hint}</small>}
     </article>
   );
 }
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const { events, state, commit, reset } = useLedger();
+  const [personId, setPersonId] = useState(PEOPLE[1].id); // 默认林队员
+  const [tab, setTab] = useState<TabKey>("registry");
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const person = useMemo(() => PEOPLE.find((p) => p.id === personId)!, [personId]);
+  const metrics = dashboardMetrics(state);
+  const sites = siteStatuses(state);
+  const closedCount = sites.filter((s) => s.closed).length;
+  const blockedCount = sites.filter((s) => !s.closed && !s.canClose).length;
+
+  const run = (make: () => LedgerEvent[]): CommitResult => {
+    let newEvents: LedgerEvent[];
+    try {
+      newEvents = make();
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "操作被拒绝";
+      setToast({ kind: "err", text });
+      return { ok: false, error: text };
+    }
+    const r = commit(newEvents);
+    setToast(r.ok ? { kind: "ok", text: "已记账" } : { kind: "err", text: r.error ?? "保存失败" });
+    if (r.ok) window.setTimeout(() => setToast(null), 1800);
+    return r;
+  };
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-10 · 考古探方工作台</p>
+          <h1>探方登记 · 交接 · 追溯台</h1>
+          <p className="subtitle">
+            队员与整理员记同一本台账：地层按探方登记开口深度、遗迹与标本；同层多人时只补观察、不改他人已交结论；
+            整理员校正写原因留原记录；未处理标本不清零，遗址不能收官。
+          </p>
         </div>
-        <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+        <div className="stack-card identity">
+          <span>当前身份（切换角色可验证权限）</span>
+          <select value={personId} onChange={(e) => setPersonId(e.target.value)}>
+            {PEOPLE.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} · {ROLE_LABEL[p.role]}</option>
+            ))}
+          </select>
+          <button onClick={() => { if (window.confirm("重置为演示台账？你做的记录会被清空。")) { reset(); setToast({ kind: "ok", text: "已重置演示数据" }); } }}>
+            重置演示数据
+          </button>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        <MetricCard label="遗址 / 探方" value={`${metrics.sites} / ${metrics.squares}`} hint={`已收官 ${closedCount} · ${blockedCount} 个遗址有未处理标本`} tone={blockedCount > 0 ? "tone-danger" : "tone-ok"} />
+        <MetricCard label="地层记录" value={metrics.layers} hint={`${metrics.uncorrectedLayers} 份草稿未提交交接`} tone={metrics.uncorrectedLayers > 0 ? "tone-watch" : "tone-ok"} />
+        <MetricCard label="标本件数" value={metrics.counts.total} hint="随登记、交回、校正实时变化" />
+        <MetricCard label="未处理标本" value={`${metrics.counts.pending} 条`} hint={`未交接 ${metrics.counts.unhanded} · 待整理 ${metrics.counts.handed}`} tone={metrics.counts.pending > 0 ? "tone-danger" : "tone-ok"} />
+      </section>
+
+      <nav className="tab-bar panel">
+        {TABS.map((t) => (
+          <button key={t.key} className={tab === t.key ? "tab active" : "tab"} onClick={() => setTab(t.key)}>
+            {t.label}
+          </button>
         ))}
-      </section>
+      </nav>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+      {toast && <div className={`toast ${toast.kind === "ok" ? "ok" : "err"}`}>{toast.text}</div>}
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
+      {tab === "registry" && <RegistryTab state={state} person={person} run={run} />}
+      {tab === "handover" && <HandoverTab state={state} person={person} run={run} />}
+      {tab === "closure" && <ClosureTab state={state} person={person} run={run} />}
+      {tab === "trace" && <TraceTab events={events} state={state} />}
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <footer className="foot-note">
+        资料（data）· 规则（rules）· 保存（storage）· 页面（ui）四层分离；台账只追加不改写，数据保存在本机浏览器，刷新后续用。
+      </footer>
     </main>
   );
 }
